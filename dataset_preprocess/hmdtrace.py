@@ -122,4 +122,5 @@ if __name__ == "__main__":
     args = parser.parse_known_args()[0]
 
     config = get_config_from_yml()
+    preprocess_hmd_trace(args.dataset, config)
     simplify_hmd_trace(args.dataset, config)

@@ -7,7 +7,7 @@ import numpy as np
 from tqdm.auto import tqdm
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
-from models import LinearRegression, ViewportTransformerMTIO
+from models import LinearRegression, ViewportTransformerMTIO, ViewportPretrainedLM
 from utils.common import get_config_from_yml, mean_square_error
 from utils.load_dataset import create_dataset
 from utils.results import Results
@@ -96,18 +96,50 @@ def test(args, model, dataloader_test_seen, dataloader_test_unseen, models_dir, 
         notebook.write(log=True, label=file_prefix + '_unseen_')
         notebook.reset()
 
-def create_model(model_name, fut_window, hidden_dim, block_num, device, seed):
+def create_model(
+    model_name: str,
+    conv_channels: int,
+    fut_window: int,
+    hidden_dim: int,
+    block_num: int,
+    rank: int,
+    device: str,
+    seed: int
+):
     model = None
     if model_name == 'regression':
         model = LinearRegression(fut_window=fut_window, device=device)
     elif model_name == 'mtio':
         model = ViewportTransformerMTIO(in_channel=2, fut_window=fut_window, d_model=hidden_dim, dim_feedforward=hidden_dim,
                                         num_encoder_layers=block_num, num_decoder_layers=block_num, device=device, seed=seed)
+    elif model_name == "plm-bert":
+        model = ViewportPretrainedLM(
+            in_channels=2,
+            fut_window=fut_window,
+            rank=rank,
+            conv_channels=conv_channels,
+            plm_type="bert",
+            device=device
+        )
+    elif model_name == "plm-gpt2":
+        model = ViewportPretrainedLM(
+            in_channels=2,
+            fut_window=fut_window,
+            rank=rank,
+            conv_channels=conv_channels,
+            plm_type="gpt2",
+            device=device
+        )
     return model
 
 
 def run(args, config):
-    assert args.model in ['regression', 'mtio']
+    assert args.model in [
+        'regression',
+        'mtio',
+        'plm-bert',
+        'plm-gpt2',
+    ]
 
     # seed
     np.random.seed(args.seed)
@@ -123,9 +155,12 @@ def run(args, config):
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
 
-    file_prefix = f'his_{args.his_window}_fut_{args.fut_window}_hid_{args.hidden_dim}_ss_{args.sample_step}_'\
+    file_prefix = f'{args.model}_conv_{args.conv_channels}_rank_{args.rank}_his_{args.his_window}_'\
+                  f'fut_{args.fut_window}_hid_{args.hidden_dim}_ss_{args.sample_step}_'\
                   f'epochs_{args.epochs}_bs_{args.bs}_lr_{args.lr}_seed_{args.seed}'
-    model = create_model(args.model, args.fut_window, args.hidden_dim, args.block_num, args.device, args.seed).to(args.device)
+    model = create_model(
+        args.model, args.conv_channels, args.fut_window, args.hidden_dim, args.block_num, args.rank, args.device, args.seed
+    ).to(args.device)
     
     if args.compile:
         assert torch.__version__ >= '2.0.0', 'Compile model requires torch version >= 2.0.0, but current torch version is ' + torch.__version__
@@ -159,6 +194,7 @@ if __name__ == '__main__':
     parser.add_argument('--test', action="store_true", help='Test model.')
     parser.add_argument('--device', action='store', dest='device', help='Device (cuda or cpu) to run experiment.')
     parser.add_argument('--model', action='store', dest='model', help='Model type')
+    parser.add_argument('--conv-channels', type=int, help='Number of kernels in feature encoder.(for plm models)', default=128)
     parser.add_argument('--hidden-dim', type=int, help='Number of hidden dimensions', default=512)
     parser.add_argument('--block-num', type=int, help='Number of encoder/decoder blocks', default=2)
     parser.add_argument('--compile', action='store_true', dest='compile', 
@@ -187,6 +223,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs-per-valid', action='store', dest='epochs_per_valid', type=int, default=3,
                         help='(Optional) The number of epochs per validation (default 3).')
     parser.add_argument('--lr', action="store", dest='lr', help='Neural network learning rate.', type=float, default=1e-4)
+    parser.add_argument('--rank', action="store", dest='rank', help='LORA matrices rank.', type=int, default=128)
     parser.add_argument('--weight-decay', action="store", dest='weight_decay', help='(Optional) Neural network weight decay.', type=float)
     parser.add_argument('--bs', action="store", dest='bs', help='Neural network batch size.', type=int)
     parser.add_argument('--seed', action="store", dest='seed', type=int, default=5, help='(Optional) Random seed.')
